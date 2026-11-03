@@ -7,7 +7,10 @@ Build the dataset from JSONL metadata
 from __future__ import annotations
 import argparse
 from typing import Any
-from datasets import Audio, load_dataset
+
+import numpy as np
+import soundfile as sf
+from datasets import load_dataset
 from transformers import WhisperProcessor
 from training.constants import (
     LANGUAGE,
@@ -45,17 +48,23 @@ def build_dataset(
 
     raw = raw.filter(_not_overlength, num_proc=num_proc)
 
-    # Lazily load the data, "audio_path" -> audio data (decoded on access)
-    raw = raw.cast_column("audio_path", Audio(sampling_rate=TARGET_SR))
+    def _load_audio(path: str) -> np.ndarray:
+        """Read a WAV to a mono float32 array - assert it is at TARGET_SR"""
+        audio, sr = sf.read(path, dtype="float32", always_2d=True)
+        if sr != TARGET_SR:
+            raise RuntimeError(
+                f"{path}: sample rate {sr} != expected {TARGET_SR} (audio must be pre-converted to 16k)"
+            )
+        return audio.mean(axis=1)  # mono-channel
 
     def _prepare(batch: dict) -> dict:
-        """Lazy per-batch transform: audio -> log-Mel, text -> token ids"""
-        audio = batch["audio_path"]
-        if isinstance(audio, list):
-            arrays = [a["array"] for a in audio]
+        """Lazy per-batch transform: audio path -> log-Mel, text -> token ids"""
+        paths = batch["audio_path"]
+        if isinstance(paths, list):
+            arrays = [_load_audio(p) for p in paths]
             texts = batch["text"]
         else:
-            arrays = [audio["array"]]
+            arrays = [_load_audio(paths)]
             texts = [batch["text"]]
 
         feats = feature_extractor(

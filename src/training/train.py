@@ -33,6 +33,12 @@ def main() -> None:
         action="store_true",
         help="do not resume from the latest checkpoint"
     )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=0,
+        help="cap training at N steps"
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -77,6 +83,20 @@ def main() -> None:
     eff = t.per_device_train_batch_size * num_gpus * grad_accum
     print(f"[train] GPUs={num_gpus} per_device={t.per_device_train_batch_size}, grad_accum={grad_accum} -> effective_batch={eff}")
 
+    # ---- test override ----
+    smoke = args.max_steps > 0
+    if smoke:
+        num_train_epochs = 1  # ignored once max_steps is set, but keep valid
+        max_steps = args.max_steps
+        eval_steps = args.max_steps
+        save_steps = args.max_steps
+        print(f"[train] TEST: max_steps={max_steps}, eval+save at step {max_steps}")
+    else:
+        num_train_epochs = t.num_train_epochs
+        max_steps = -1  # HF default: epoch-driven
+        eval_steps = t.eval_steps
+        save_steps = t.save_steps
+
     # ---- training args ----
     targs = Seq2SeqTrainingArguments(
         output_dir=t.output_dir,
@@ -86,15 +106,16 @@ def main() -> None:
         learning_rate=t.learning_rate,
         lr_scheduler_type=t.lr_scheduler_type,
         warmup_ratio=t.warmup_ratio,
-        num_train_epochs=t.num_train_epochs,
+        num_train_epochs=num_train_epochs,
+        max_steps=max_steps,
         bf16=t.bf16,
         weight_decay=t.weight_decay,
         max_grad_norm=t.max_grad_norm,
         seed=t.seed,
         eval_strategy="steps",
-        eval_steps=t.eval_steps,
+        eval_steps=eval_steps,
         save_strategy="steps",
-        save_steps=t.save_steps,
+        save_steps=save_steps,
         save_total_limit=t.save_total_limit,
         predict_with_generate=t.predict_with_generate,
         generation_max_length=t.generation_max_length,
@@ -119,7 +140,7 @@ def main() -> None:
     # ---- resume logic ----
     resume = None
     out = Path(t.output_dir)
-    if not args.no_resume and out.exists() and any(out.glob("checkpoint-*")):
+    if not smoke and not args.no_resume and out.exists() and any(out.glob("checkpoint-*")):
         resume = True
         print(f"[train] resuming from latest checkpoint in {out}")
 

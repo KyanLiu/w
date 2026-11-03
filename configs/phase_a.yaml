@@ -1,0 +1,43 @@
+phase: phase_a
+init_model: openai/whisper-large-v3-turbo
+language: kk
+task: transcribe
+timestamps: false
+
+data:
+  train_metadata:
+    - data/metadata/ksc2_train.jsonl
+    - data/metadata/kazemotts_train.jsonl
+  eval_metadata: data/metadata/ksc2_eval_597.jsonl
+  max_audio_seconds: 30
+  num_proc: 8
+
+training:
+  output_dir: checkpoints/phase_a
+  effective_batch_size: 160
+  per_device_train_batch_size: 20
+  per_device_eval_batch_size: 10
+
+  learning_rate: 1.0e-5
+  lr_scheduler_type: linear
+  warmup_ratio: 0.01
+  num_train_epochs: 3
+  bf16: true
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  seed: 42
+
+  eval_steps: 1112
+  save_steps: 1112
+  save_total_limit: 3
+
+  predict_with_generate: true
+  generation_max_length: 225
+
+  metric_for_best_model: wer
+  greater_is_better: false
+  load_best_model_at_end: true
+
+  dataloader_num_workers: 8
+  report_to: tensorboard
+  logging_steps: 50

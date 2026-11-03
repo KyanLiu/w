@@ -25,6 +25,7 @@ train = [
     "librosa",
     "pyyaml",
     "evaluate",
+    "tensorboard",
 ]
 
 [tool.setuptools.packages.find]

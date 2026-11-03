@@ -10,3 +10,5 @@ LANGUAGE = "kazakh"
 TASK = "transcribe"
 TARGET_SR = TARGET_SAMPLE_RATE
 MAX_AUDIO_SECONDS = 30.0
+# Skipped pad values
+LABEL_IGNORE_INDEX = -100

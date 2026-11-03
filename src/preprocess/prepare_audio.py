@@ -107,6 +107,12 @@ def main():
         "--out-root",
         default="data/wav16k"
     )
+    # Parallel worker processes
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8
+    )
     args = parser.parse_args()
 
     extracted_root = Path(args.extracted_root)
@@ -114,7 +120,7 @@ def main():
     targets = ["ksc2", "kazemotts"] if args.corpus == "all" else [args.corpus]
 
     for corpus in targets:
-        convert_corpus(corpus, extracted_root, out_root, 8)
+        convert_corpus(corpus, extracted_root, out_root, args.workers)
 
 
 if __name__ == "__main__":

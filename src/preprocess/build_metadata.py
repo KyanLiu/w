@@ -8,14 +8,15 @@ from pathlib import Path
 
 from preprocess.constants import SEED, SRC_SUBDIR
 from preprocess.metadata_utils import (
-    build_entry,
+    build_entries_parallel,
     match_wavs_with_text,
     write_jsonl,
 )
 
 
 def build_ksc2(wav_root: Path, src_root: Path, metadata_dir: Path,
-               eval_source: str, eval_count: int, base_dir: Path) -> None:
+               eval_source: str, eval_count: int, base_dir: Path,
+               workers: int) -> None:
     """Build the JSONL for KSC2 train and eval"""
     train_split_dir = wav_root / "Train"
     eval_split_dir = wav_root / eval_source
@@ -26,10 +27,8 @@ def build_ksc2(wav_root: Path, src_root: Path, metadata_dir: Path,
         sys.exit(f"[error] expected KSC2 {eval_source} dir: {eval_split_dir}")
 
     print(f"[ksc2] collecting all training data from {train_split_dir}")
-    train_rows = [
-        build_entry(wav, txt, "ksc2", "train", base_dir)
-        for wav, txt in match_wavs_with_text(train_split_dir, src_root / "Train")
-    ]
+    train_pairs = list(match_wavs_with_text(train_split_dir, src_root / "Train"))
+    train_rows = build_entries_parallel(train_pairs, "ksc2", "train", base_dir, workers)
 
     print(f"[ksc2] collecting all eval data {eval_source} from {eval_split_dir}")
     eval_pool = [
@@ -45,15 +44,16 @@ def build_ksc2(wav_root: Path, src_root: Path, metadata_dir: Path,
     idxs = sorted(rng.sample(range(len(eval_pool)), eval_count))
     eval_set = set(idxs)
 
-    eval_rows = [
-        build_entry(eval_pool[i][0], eval_pool[i][1], "ksc2", "eval", base_dir)
-        for i in idxs
-    ]
+    eval_rows = build_entries_parallel(
+        [eval_pool[i] for i in idxs], "ksc2", "eval", base_dir, workers
+    )
     # Remaining data is combined with training rows
-    leftover_rows = [
-        build_entry(wav, txt, "ksc2", "train", base_dir)
-        for i, (wav, txt) in enumerate(eval_pool) if i not in eval_set
+    leftover_pairs = [
+        (wav, txt) for i, (wav, txt) in enumerate(eval_pool) if i not in eval_set
     ]
+    leftover_rows = build_entries_parallel(
+        leftover_pairs, "ksc2", "train", base_dir, workers
+    )
     train_rows.extend(leftover_rows)
 
     write_jsonl(train_rows, metadata_dir / "ksc2_train.jsonl")
@@ -65,13 +65,11 @@ def build_ksc2(wav_root: Path, src_root: Path, metadata_dir: Path,
 
 
 def build_kazemotts(wav_root: Path, src_root: Path, metadata_dir: Path,
-                    base_dir: Path) -> None:
+                    base_dir: Path, workers: int) -> None:
     """Build the JSONL for all KazEmoTTS train/eval audio"""
     print(f"[kazEmoTTS] collecting all data from {wav_root}")
-    rows = [
-        build_entry(wav, txt, "kazemotts", "train", base_dir)
-        for wav, txt in match_wavs_with_text(wav_root, src_root)
-    ]
+    pairs = list(match_wavs_with_text(wav_root, src_root))
+    rows = build_entries_parallel(pairs, "kazemotts", "train", base_dir, workers)
     if not rows:
         sys.exit(f"[error] no KazEmoTTS WAVs found in {wav_root}")
 
@@ -118,6 +116,12 @@ def main():
         default=None,
         help="directory that audio_path is made relative to (default: cwd)"
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="parallel processes for reading audio durations"
+    )
 
     args = parser.parse_args()
 
@@ -139,10 +143,11 @@ def main():
                 metadata_dir,
                 args.ksc2_eval_source,
                 args.ksc2_eval_count,
-                base_dir
+                base_dir,
+                args.workers
             )
         elif corpus == "kazemotts":
-            build_kazemotts(corpus_wav_root, src_root, metadata_dir, base_dir)
+            build_kazemotts(corpus_wav_root, src_root, metadata_dir, base_dir, args.workers)
 
 
 

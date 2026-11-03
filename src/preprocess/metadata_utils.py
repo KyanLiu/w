@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import soundfile as sf
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Iterator
 
@@ -77,3 +78,34 @@ def build_entry(wav: Path, text: str, corpus: str, split: str, base_dir: Path) -
         "split": split,
         "duration": round(audio_duration_seconds(wav), 3),
     }
+
+
+def _build_entry_task(args: tuple[str, str, str, str, str]) -> dict:
+    """Picklable worker wrapper for build_entry (used by the process pool)"""
+    wav_str, text, corpus, split, base_dir_str = args
+    return build_entry(Path(wav_str), text, corpus, split, Path(base_dir_str))
+
+
+def build_entries_parallel(
+    pairs: list[tuple[Path, str]],
+    corpus: str,
+    split: str,
+    base_dir: Path,
+    workers: int,
+) -> list[dict]:
+    """
+    Build metadata rows for many (wav, text) pairs in parallel.
+    """
+    if not pairs:
+        return []
+    if workers <= 1:
+        return [build_entry(wav, text, corpus, split, base_dir) for wav, text in pairs]
+
+    base_dir_str = str(base_dir)
+    tasks = [
+        (str(wav), text, corpus, split, base_dir_str)
+        for wav, text in pairs
+    ]
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        # executor.map preserves input order
+        return list(executor.map(_build_entry_task, tasks, chunksize=256))

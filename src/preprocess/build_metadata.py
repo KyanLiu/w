@@ -28,12 +28,12 @@ def build_ksc2(wav_root: Path, src_root: Path, metadata_dir: Path,
     print(f"[ksc2] collecting all training data from {train_split_dir}")
     train_rows = [
         build_entry(wav, txt, "ksc2", "train", base_dir)
-        for wav, txt in match_wavs_with_text(train_split_dir, src_root)
+        for wav, txt in match_wavs_with_text(train_split_dir, src_root / "Train")
     ]
 
     print(f"[ksc2] collecting all eval data {eval_source} from {eval_split_dir}")
     eval_pool = [
-        (wav, txt) for wav, txt in match_wavs_with_text(eval_split_dir, src_root)
+        (wav, txt) for wav, txt in match_wavs_with_text(eval_split_dir, src_root / eval_source)
     ]
     eval_pool.sort(key=lambda wt: wt[0].as_posix())
 

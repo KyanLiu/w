@@ -114,7 +114,7 @@ def main():
     targets = ["ksc2", "kazemotts"] if args.corpus == "all" else [args.corpus]
 
     for corpus in targets:
-        convert_corpus(corpus, extracted_root, out_root, 2)
+        convert_corpus(corpus, extracted_root, out_root, 8)
 
 
 if __name__ == "__main__":

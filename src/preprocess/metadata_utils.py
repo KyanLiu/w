@@ -4,11 +4,18 @@ Shared helpers for building JSONL metadata files.
 from __future__ import annotations
 
 import json
+import soundfile as sf
 from pathlib import Path
 from typing import Iterator
 
 from preprocess.constants import LANGUAGE
 from preprocess.normalization import normalize
+
+
+def audio_duration_seconds(wav: Path) -> float:
+    """Return duration in seconds by reading the WAV header only (no decode)."""
+    info = sf.info(str(wav))
+    return info.frames / float(info.samplerate)
 
 
 def read_transcript(txt_path: Path) -> str | None:
@@ -68,4 +75,5 @@ def build_entry(wav: Path, text: str, corpus: str, split: str, base_dir: Path) -
         "language": LANGUAGE,
         "corpus": corpus,
         "split": split,
+        "duration": round(audio_duration_seconds(wav), 3),
     }

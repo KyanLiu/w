@@ -35,12 +35,18 @@ def build_dataset(
         "json",
         data_files={"train": train_metadata, "eval": eval_metadata},
     )
-    # Lazily load the data, "audio_path" -> audio data
-    raw = raw.cast_column("audio_path", Audio(sampling_rate=TARGET_SR))
 
     feature_extractor = processor.feature_extractor
     tokenizer = processor.tokenizer
-    max_samples = int(max_audio_seconds * TARGET_SR)
+
+    def _not_overlength(example: dict) -> bool:
+        """Keep clips no longer than max_audio_seconds"""
+        return example["duration"] <= max_audio_seconds
+
+    raw = raw.filter(_not_overlength, num_proc=num_proc)
+
+    # Lazily load the data, "audio_path" -> audio data (decoded on access)
+    raw = raw.cast_column("audio_path", Audio(sampling_rate=TARGET_SR))
 
     def _prepare(batch: dict) -> dict:
         """Lazy per-batch transform: audio -> log-Mel, text -> token ids"""
@@ -59,11 +65,6 @@ def build_dataset(
 
         return {"input_features": feats, "labels": labels}
 
-    def _not_overlength(example: dict) -> bool:
-        """Filter out audio longer than max_samples"""
-        return len(example["audio_path"]["array"]) <= max_samples
-
-    raw = raw.filter(_not_overlength, num_proc=num_proc)
     raw = raw.with_transform(_prepare)
     return raw
 

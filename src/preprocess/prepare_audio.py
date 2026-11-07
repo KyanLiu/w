@@ -3,7 +3,7 @@ Convert
 """
 import sys
 import argparse
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from preprocess.constants import SRC_SUBDIR, CORPUS_AUDIO_EXT, TARGET_SAMPLE_RATE
@@ -32,6 +32,12 @@ def _convert_single_corpus(src: str, dst: str) -> tuple[str, str | None]:
         return (src, f"{type(e).__name__}: {e}")
 
 
+def _convert_one(job: tuple[str, str]) -> tuple[str, str | None]:
+    """Single-arg wrapper so the job generator can be streamed via executor.map."""
+    src, dst = job
+    return _convert_single_corpus(src, dst)
+
+
 def _iter_search_jobs(src_root: Path, ext: str, out_root: Path):
     # Return all searches
     for src in src_root.rglob(f"*{ext}"):
@@ -58,26 +64,27 @@ def convert_corpus(corpus: str, extracted_root: Path, out_root: Path, workers: i
         sys.exit(f"[error] source not found: {src_root}")
 
 
-    # This removes the lazy loading
-    jobs = list(_iter_search_jobs(src_root, ext, dst_root))
-    if not jobs:
-        sys.exit(f"[error] no {ext} files under {src_root}")
+    # Stream jobs lazily through the pool now
+    jobs = _iter_search_jobs(src_root, ext, dst_root)
 
-    print(f"[convert] {corpus} converting: {len(jobs)} files, {workers} workers")
+    print(f"[convert] {corpus} converting (streaming), {workers} workers, ext={ext}")
 
     done = 0
     errors: list[str] = []
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
-        future_to_task = [executor.submit(_convert_single_corpus, src, dst) for src, dst in jobs]
-
-        for future in as_completed(future_to_task):
-            src, err = future.result()
+        for src, err in executor.map(_convert_one, jobs, chunksize=64):
             done += 1
             if err:
                 errors.append(f"{src}: {err}")
-            if done % 2000 == 0 or done == len(jobs):
-                print(f"{done}/{len(jobs)} done ({len(errors)} errors)")
+            if done % 2000 == 0:
+                print(f"{done} done ({len(errors)} errors)")
+
+    if done == 0:
+        sys.exit(f"[error] no {ext} files under {src_root}")
+
+    print(f"{done} done ({len(errors)} errors)")
+
     if errors:
         print(f"\n[warn] {len(errors)} files failed - not writing .done marker.")
         for line in errors[:20]:
@@ -88,7 +95,7 @@ def convert_corpus(corpus: str, extracted_root: Path, out_root: Path, workers: i
 
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("ok\n")
-    print(f"[ok] {corpus}: all {len(jobs)} files converted -> {dst_root}")
+    print(f"[ok] {corpus}: all {done} files converted -> {dst_root}")
 
 
 def main():

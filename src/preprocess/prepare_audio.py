@@ -38,7 +38,8 @@ def _iter_search_jobs(src_root: Path, ext: str, out_root: Path):
         rel = src.relative_to(src_root).with_suffix(".wav")
         yield str(src), str(out_root / rel)
 
-def convert_corpus(corpus: str, extracted_root: Path, out_root: Path, workers: int) -> None:
+def convert_corpus(corpus: str, extracted_root: Path, out_root: Path, workers: int,
+                   missing_ok: bool = False) -> None:
     sub = SRC_SUBDIR[corpus]
     ext = CORPUS_AUDIO_EXT[corpus]
     src_root = extracted_root / sub
@@ -50,6 +51,10 @@ def convert_corpus(corpus: str, extracted_root: Path, out_root: Path, workers: i
         print(f"[skip] {corpus} skipped: already converted in {dst_root}")
         return
     if not src_root.exists():
+        # For an explicit single corpus this is a hard error
+        if missing_ok:
+            print(f"[skip] {corpus} skipped: source not found: {src_root}")
+            return
         sys.exit(f"[error] source not found: {src_root}")
 
 
@@ -94,7 +99,7 @@ def main():
     # Corpus choice
     parser.add_argument(
         "--corpus",
-        choices=["ksc2", "kazemotts", "all"],
+        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "all"],
         default="all"
     )
     # Storing extracted data
@@ -117,10 +122,13 @@ def main():
 
     extracted_root = Path(args.extracted_root)
     out_root = Path(args.out_root)
-    targets = ["ksc2", "kazemotts"] if args.corpus == "all" else [args.corpus]
+    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos"]
+    sweep = args.corpus == "all"
+    targets = all_corpora if sweep else [args.corpus]
 
     for corpus in targets:
-        convert_corpus(corpus, extracted_root, out_root, args.workers)
+        convert_corpus(corpus, extracted_root, out_root, args.workers,
+                       missing_ok=sweep)
 
 
 if __name__ == "__main__":

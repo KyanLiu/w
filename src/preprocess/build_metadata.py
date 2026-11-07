@@ -1,155 +1,131 @@
-"""
-Build the JSONL data based on WAVs and .txt transcripts
-"""
+"""Build JSONL metadata from the selection files written by prepare_audio"""
 import sys
-import argparse
+import json
 import random
+import argparse
 from pathlib import Path
-
-from preprocess.constants import SEED, SRC_SUBDIR
-from preprocess.metadata_utils import (
-    build_entries_parallel,
-    match_wavs_with_text,
-    write_jsonl,
-)
+from preprocess.constants import SEED, CORPUS_LANGUAGE
+from preprocess.metadata_utils import write_jsonl
 
 
-def build_ksc2(wav_root: Path, src_root: Path, metadata_dir: Path,
-               eval_source: str, eval_count: int, base_dir: Path,
-               workers: int) -> None:
-    """Build the JSONL for KSC2 train and eval"""
-    train_split_dir = wav_root / "Train"
-    eval_split_dir = wav_root / eval_source
-
-    if not train_split_dir.exists():
-        sys.exit(f"[error] expected KSC2 Train dir: {train_split_dir}")
-    if not eval_split_dir.exists():
-        sys.exit(f"[error] expected KSC2 {eval_source} dir: {eval_split_dir}")
-
-    print(f"[ksc2] collecting all training data from {train_split_dir}")
-    train_pairs = list(match_wavs_with_text(train_split_dir, src_root / "Train"))
-    train_rows = build_entries_parallel(train_pairs, "ksc2", "train", base_dir, workers)
-
-    print(f"[ksc2] collecting all eval data {eval_source} from {eval_split_dir}")
-    eval_pool = [
-        (wav, txt) for wav, txt in match_wavs_with_text(eval_split_dir, src_root / eval_source)
-    ]
-    eval_pool.sort(key=lambda wt: wt[0].as_posix())
-
-    if len(eval_pool) < eval_count:
-        sys.exit(f"[error] {eval_source} has only {len(eval_pool)} usable data entries out of {eval_count} for eval")
-
-    # Generate the selected eval set
-    rng = random.Random(SEED)
-    idxs = sorted(rng.sample(range(len(eval_pool)), eval_count))
-    eval_set = set(idxs)
-
-    eval_rows = build_entries_parallel(
-        [eval_pool[i] for i in idxs], "ksc2", "eval", base_dir, workers
-    )
-    # Remaining data is combined with training rows
-    leftover_pairs = [
-        (wav, txt) for i, (wav, txt) in enumerate(eval_pool) if i not in eval_set
-    ]
-    leftover_rows = build_entries_parallel(
-        leftover_pairs, "ksc2", "train", base_dir, workers
-    )
-    train_rows.extend(leftover_rows)
-
-    write_jsonl(train_rows, metadata_dir / "ksc2_train.jsonl")
-    write_jsonl(eval_rows, metadata_dir / f"ksc2_eval_{eval_count}.jsonl")
-    print(f"[ksc2] written jsonl, train={len(train_rows)} "
-          f"(Train + {len(leftover_rows)} leftover {eval_source}), "
-          f"eval={len(eval_rows)} (held out, disjoint)")
+def _load_selection(corpus: str, metadata_dir: Path, missing_ok: bool = False) -> list[dict] | None:
+    path = metadata_dir / f"{corpus}_selection.jsonl"
+    if not path.exists():
+        if missing_ok:
+            print(f"[skip] {corpus}: no selection file yet ({path})")
+            return None
+        sys.exit(f"[error] selection not found: {path} "
+                 f"(run prepare_audio --corpus {corpus} first)")
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
+def _row(rel_key: str, text: str, duration, corpus: str, split: str,
+         wav_root: Path, base_dir: Path) -> dict | None:
+    wav = wav_root / rel_key
+    if not wav.exists():
+        return None
+    try:
+        rel = wav.resolve().relative_to(base_dir).as_posix()
+    except ValueError:
+        rel = wav.as_posix()
+    return {
+        "audio_path": rel,
+        "text": text,
+        "language": CORPUS_LANGUAGE[corpus],
+        "corpus": corpus,
+        "split": split,
+        "duration": round(float(duration), 3),
+    }
 
-def build_kazemotts(wav_root: Path, src_root: Path, metadata_dir: Path,
-                    base_dir: Path, workers: int) -> None:
-    """Build the JSONL for all KazEmoTTS train/eval audio"""
-    print(f"[kazEmoTTS] collecting all data from {wav_root}")
-    pairs = list(match_wavs_with_text(wav_root, src_root))
-    rows = build_entries_parallel(pairs, "kazemotts", "train", base_dir, workers)
+
+def build_corpus(
+    corpus: str, wav_root: Path, metadata_dir: Path,
+    base_dir: Path, eval_count: int = 0, missing_ok: bool = False
+) -> None:
+    """Build train/eval JSONL for one corpus from its selection"""
+    sel = _load_selection(corpus, metadata_dir, missing_ok)
+    if sel is None:
+        return
+
+    rows, missing = [], 0
+    for r in sel:
+        row = _row(r["rel_key"], r["text"], r["duration"], corpus, "train", wav_root, base_dir)
+        if row is None:
+            missing += 1
+        else:
+            rows.append(row)
     if not rows:
-        sys.exit(f"[error] no KazEmoTTS WAVs found in {wav_root}")
+        sys.exit(f"[error] {corpus}: no converted WAVs found "
+                 f"(run prepare_audio --corpus {corpus})")
+    if missing:
+        print(f"[warn] {corpus}: {missing} selected clips had no WAV (skipped)")
 
-    write_jsonl(rows, metadata_dir / "kazemotts_train.jsonl")
-    print(f"[kazEmoTTS] written jsonl, train={len(rows)}")
+    lang = CORPUS_LANGUAGE[corpus]
+
+    if eval_count <= 0:
+        write_jsonl(rows, metadata_dir / f"{corpus}_train.jsonl")
+        total_h = sum(r["duration"] for r in rows) / 3600.0
+        print(f"[{corpus}] train={len(rows)} ({total_h:.1f} h, language={lang})")
+        return
+
+    # Seeded, disjoint eval set
+    rows.sort(key=lambda r: r["audio_path"])
+    if len(rows) < eval_count:
+        sys.exit(f"[error] {corpus}: only {len(rows)} clips, need {eval_count} for eval")
+    rng = random.Random(SEED)
+    eval_idx = set(rng.sample(range(len(rows)), eval_count))
+
+    eval_rows, train_rows = [], []
+    for i, row in enumerate(rows):
+        if i in eval_idx:
+            r2 = dict(row); r2["split"] = "eval"
+            eval_rows.append(r2)
+        else:
+            train_rows.append(row)
+
+    write_jsonl(train_rows, metadata_dir / f"{corpus}_train.jsonl")
+    write_jsonl(eval_rows, metadata_dir / f"{corpus}_eval_{eval_count}.jsonl")
+    train_h = sum(r["duration"] for r in train_rows) / 3600.0
+    eval_h = sum(r["duration"] for r in eval_rows) / 3600.0
+    print(f"[{corpus}] train={len(train_rows)} ({train_h:.1f} h), "
+          f"eval={len(eval_rows)} ({eval_h:.1f} h, held out, disjoint), "
+          f"language={lang}")
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    # Corpus choice
-    parser.add_argument(
-        "--corpus",
-        choices=["ksc2", "kazemotts", "all"],
-        default="all"
-    )
-    # Location of converted WAVs
-    parser.add_argument(
-        "--wav-root",
-        default="data/wav16k"
-    )
-    # Storing extracted data
-    parser.add_argument(
-        "--extracted-root",
-        default="data/extracted"
-    )
-    parser.add_argument(
-        "--metadata-dir",
-        default="data/metadata"
-    )
-    parser.add_argument(
-        "--ksc2-eval-source",
-        choices = ["Test", "Dev"],
-        default="Test"
-    )
-    parser.add_argument(
-        "--ksc2-eval-count",
-        type=int,
-        default=597
-    )
-    parser.add_argument(
-        "--base-dir",
-        default=None,
-        help="directory that audio_path is made relative to (default: cwd)"
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=8,
-        help="parallel processes for reading audio durations"
-    )
-
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--corpus",
+        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "all"],
+        default="all")
+    parser.add_argument("--wav-root", default="data/wav16k")
+    parser.add_argument("--metadata-dir", default="data/metadata")
+    parser.add_argument("--base-dir", default=None, help="dir that audio_path is relative to (default: cwd)")
+    # Per-corpus eval holdout sizes (0 = no eval split, pure train).
+    parser.add_argument("--ksc2-eval-count", type=int, default=597)
+    parser.add_argument("--cve-eval-count", type=int, default=400)
+    parser.add_argument("--cvr-eval-count", type=int, default=400)
     args = parser.parse_args()
 
     wav_root = Path(args.wav_root)
-    extracted_root = Path(args.extracted_root)
     metadata_dir = Path(args.metadata_dir)
     base_dir = Path(args.base_dir).resolve() if args.base_dir else Path.cwd()
-    targets = ["ksc2", "kazemotts"] if args.corpus == "all" else [args.corpus]
+
+    eval_count = {
+        "ksc2": args.ksc2_eval_count,
+        "kazemotts": 0,
+        "cve": args.cve_eval_count,
+        "cvr": args.cvr_eval_count,
+        "golos": 0,
+    }
+
+    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos"]
+    sweep = args.corpus == "all"
+    targets = all_corpora if sweep else [args.corpus]
 
     for corpus in targets:
-        src_root = extracted_root / SRC_SUBDIR[corpus]
-        corpus_wav_root = wav_root / corpus
-        if not corpus_wav_root.exists():
-            sys.exit(f"[error] converted WAVs not found: {corpus_wav_root}")
-        if corpus == "ksc2":
-            build_ksc2(
-                corpus_wav_root,
-                src_root,
-                metadata_dir,
-                args.ksc2_eval_source,
-                args.ksc2_eval_count,
-                base_dir,
-                args.workers
-            )
-        elif corpus == "kazemotts":
-            build_kazemotts(corpus_wav_root, src_root, metadata_dir, base_dir, args.workers)
-
-
+        build_corpus(corpus, wav_root / corpus, metadata_dir, base_dir, eval_count=eval_count[corpus], missing_ok=sweep)
 
 
 if __name__ == "__main__":

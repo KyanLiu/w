@@ -3,7 +3,6 @@ Preprocessing constants used
 """
 from __future__ import annotations
 
-LANGUAGE = "kk"
 SEED = 42
 TARGET_SAMPLE_RATE = 16000
 
@@ -29,4 +28,16 @@ CORPUS_LANGUAGE = {
     "cve": "en",
     "cvr": "ru",
     "golos": "ru",
+}
+
+# Corpus pairs audio with its transcript.
+# txt_tree : audio tree + per-file .txt sidecar (ksc2, kazemotts)
+# cv_tsv   : Common Voice clips/*.mp3 + validated.tsv (cve, cvr)
+# manifest : audio tree + a JSONL manifest mapping id -> text (golos)
+CORPUS_KIND = {
+    "ksc2": "txt_tree",
+    "kazemotts": "txt_tree",
+    "cve": "cv_tsv",
+    "cvr": "cv_tsv",
+    "golos": "manifest",
 }

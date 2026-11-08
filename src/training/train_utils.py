@@ -1,6 +1,6 @@
 """Helpers for train.py."""
 from __future__ import annotations
-from training.constants import LABEL_IGNORE_INDEX
+from training.constants import LABEL_IGNORE_INDEX, LANGUAGE_NAMES
 import torch
 
 
@@ -51,11 +51,15 @@ def preflight_probe(dataset, collator, processor) -> None:
     decoded = processor.tokenizer.decode(first, skip_special_tokens=False)
     print(f"decoded[0]: {decoded[:140]}")
 
-    kk_id = processor.tokenizer.convert_tokens_to_ids("<|kk|>")
-    if not ((labels == kk_id).any().item() or "<|kk|>" in decoded):
+    # A valid Whisper language prefix token must be present
+    expected = [f"<|{code}|>" for code in LANGUAGE_NAMES]
+    ids = {tok: processor.tokenizer.convert_tokens_to_ids(tok) for tok in expected}
+    present = [tok for tok, tid in ids.items()
+               if (labels == tid).any().item() or tok in decoded]
+    if not present:
         raise RuntimeError(
-            "pre-flight: <|kk|> token not found in labels — processor language is misconfigured (expected language='kazakh'). Aborting before training."
+            f"pre-flight: none of {expected} found in labels — processor language is misconfigured. Aborting before training."
         )
 
-    print("[ok] Kazakh language token present.")
+    print(f"[ok] language token(s) present: {present}")
     print("[train] pre-flight probe passed.")

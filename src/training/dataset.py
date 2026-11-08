@@ -14,6 +14,7 @@ from datasets import load_dataset
 from transformers import WhisperProcessor
 from training.constants import (
     LANGUAGE,
+    LANGUAGE_NAMES,
     MAX_AUDIO_SECONDS,
     MODEL_ID,
     TARGET_SR,
@@ -29,15 +30,19 @@ def load_processor(model_id: str = MODEL_ID):
 
 def build_dataset(
     train_metadata: list[str],
-    eval_metadata: str,
+    eval_metadata: str | dict[str, str],
     processor: Any,
     max_audio_seconds: float = MAX_AUDIO_SECONDS,
     num_proc: int = 1):
-    """Build a DatasetDict with lazily-featurized `train` and `eval` splits"""
-    raw = load_dataset(
-        "json",
-        data_files={"train": train_metadata, "eval": eval_metadata},
-    )
+    """Build a DatasetDict with lazily-featurized splits"""
+    if isinstance(eval_metadata, dict):
+        data_files = {"train": train_metadata}
+        for name, path in eval_metadata.items():
+            data_files[f"eval_{name}"] = path
+    else:
+        data_files = {"train": train_metadata, "eval": eval_metadata}
+
+    raw = load_dataset("json", data_files=data_files)
 
     feature_extractor = processor.feature_extractor
     tokenizer = processor.tokenizer
@@ -63,14 +68,25 @@ def build_dataset(
         if isinstance(paths, list):
             arrays = [_load_audio(p) for p in paths]
             texts = batch["text"]
+            langs = batch["language"]
         else:
             arrays = [_load_audio(paths)]
             texts = [batch["text"]]
+            langs = [batch["language"]]
 
         feats = feature_extractor(
             arrays, sampling_rate=TARGET_SR
         ).input_features
-        labels = tokenizer(texts).input_ids
+
+        # Tokenize each label with its own language prefix to get tokens
+        labels = []
+        current_lang = None
+        for text, lang in zip(texts, langs):
+            full_lang = LANGUAGE_NAMES.get(lang, lang)
+            if full_lang != current_lang:
+                tokenizer.set_prefix_tokens(language=full_lang, task=TASK)
+                current_lang = full_lang
+            labels.append(tokenizer(text).input_ids)
 
         return {"input_features": feats, "labels": labels}
 
@@ -119,7 +135,9 @@ def main() -> None:
         max_audio_seconds=args.max_audio_seconds,
         num_proc=args.num_proc,
     )
-    print(f"[dataset] sizes: train={dataset['train'].num_rows}, eval={dataset['eval'].num_rows}")
+    eval_names = [k for k in dataset.keys() if k.startswith("eval")]
+    sizes = {k: dataset[k].num_rows for k in ["train"] + eval_names}
+    print(f"[dataset] sizes: {sizes}")
 
     print("[dataset] ready (lazy)")
 

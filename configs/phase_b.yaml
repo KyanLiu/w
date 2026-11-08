@@ -1,0 +1,52 @@
+phase: phase_b
+init_model: checkpoints/phase_a/best # Start from the best Phase A (Kazakh-adapted) checkpoint
+language: null
+task: transcribe
+timestamps: false
+
+data:
+  # Multilingual rehearsal mix (~74% kk / 14% ru / 11% en):
+  # kk = ksc2 (~1187h) + kazemotts (~75h) ~= 1262 h
+  # ru = cvr  (~249h)
+  # en = cve  (~199h)
+  train_metadata:
+    - data/metadata/ksc2_train.jsonl
+    - data/metadata/kazemotts_train.jsonl
+    - data/metadata/cvr_train.jsonl
+    - data/metadata/cve_train.jsonl
+  eval_metadata:
+    kk: data/metadata/ksc2_eval_597.jsonl
+    ru: data/metadata/cvr_eval_400.jsonl
+    en: data/metadata/cve_eval_400.jsonl
+  max_audio_seconds: 30
+  num_proc: 8
+
+training:
+  output_dir: checkpoints/phase_b
+  effective_batch_size: 160
+  per_device_train_batch_size: 20
+  per_device_eval_batch_size: 10
+
+  learning_rate: 5.0e-7
+  lr_scheduler_type: linear
+  warmup_ratio: 0.01
+  num_train_epochs: 2
+  bf16: true
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  seed: 42
+
+  eval_steps: 1620
+  save_steps: 1620
+  save_total_limit: 3
+
+  predict_with_generate: true
+  generation_max_length: 225
+
+  metric_for_best_model: eval_kk_wer
+  greater_is_better: false
+  load_best_model_at_end: true
+
+  dataloader_num_workers: 8
+  report_to: tensorboard
+  logging_steps: 50

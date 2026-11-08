@@ -9,14 +9,14 @@ import yaml
 @dataclass
 class DataConfig:
     train_metadata: list[str]
-    eval_metadata: str
+    eval_metadata: str | dict[str, str]
     max_audio_seconds: float = 30.0
     num_proc: int = 8
 
 
 @dataclass
 class TrainingConfig:
-    output_dir: str = "checkpoints/phase_a"
+    output_dir: str = "checkpoints/new_phase"
 
     effective_batch_size: int = 160
     per_device_train_batch_size: int = 10
@@ -53,7 +53,7 @@ class PhaseConfig:
     init_model: str
     data: DataConfig
     training: TrainingConfig
-    language: str = "kk"
+    language: str | None = "kk"   # None = Whisper auto-detects language at generation
     task: str = "transcribe"
     timestamps: bool = False
 

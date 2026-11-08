@@ -55,7 +55,15 @@ def main() -> None:
         max_audio_seconds=cfg.data.max_audio_seconds,
         num_proc=cfg.data.num_proc,
     )
-    print(f"[train] data sizes: train={dataset['train'].num_rows}, eval={dataset['eval'].num_rows}")
+    # Eval may be a single "eval" split or several "eval_<name>" splits.
+    eval_split_names = [k for k in dataset.keys() if k.startswith("eval")]
+    if eval_split_names == ["eval"]:
+        eval_dataset = dataset["eval"]
+    else:
+        # dict -> Trainer reports metrics per set as eval_<name>_<metric>
+        eval_dataset = {k[len("eval_"):]: dataset[k] for k in eval_split_names}
+    sizes = {k: dataset[k].num_rows for k in ["train"] + eval_split_names}
+    print(f"[train] data sizes: {sizes}")
 
     # ---- model
     print(f"[train] loading model: {cfg.init_model}")
@@ -112,6 +120,7 @@ def main() -> None:
         weight_decay=t.weight_decay,
         max_grad_norm=t.max_grad_norm,
         seed=t.seed,
+        remove_unused_columns=False,
         eval_strategy="steps",
         eval_steps=eval_steps,
         save_strategy="steps",
@@ -131,7 +140,7 @@ def main() -> None:
         model=model,
         args=targs,
         train_dataset=dataset["train"],
-        eval_dataset=dataset["eval"],
+        eval_dataset=eval_dataset,
         data_collator=collator,
         compute_metrics=compute_metrics,
         processing_class=processor,

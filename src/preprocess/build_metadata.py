@@ -39,6 +39,43 @@ def _row(rel_key: str, text: str, duration, corpus: str, split: str,
     }
 
 
+def build_corpus_native_splits(
+    corpus: str, wav_root: Path, metadata_dir: Path,
+    base_dir: Path, missing_ok: bool = False,
+) -> None:
+    """Build one JSONL per NATIVE split (train/dev/test) for corpora that ship
+    their own splits (KazMedSpeech). Unlike build_corpus, this does NOT
+    draw a random holdout — it groups selection rows by their recorded `split`
+    so the corpus's own train/dev/test are preserved. The `test` split is built
+    but reserved (not referenced by the training config)."""
+    sel = _load_selection(corpus, metadata_dir, missing_ok)
+    if sel is None:
+        return
+
+    by_split: dict[str, list[dict]] = {}
+    missing = 0
+    for r in sel:
+        split = r.get("split", "train")
+        row = _row(r["rel_key"], r["text"], r["duration"], corpus, split, wav_root, base_dir)
+        if row is None:
+            missing += 1
+        else:
+            by_split.setdefault(split, []).append(row)
+    if not by_split:
+        sys.exit(f"[error] {corpus}: no converted WAVs found (run prepare_audio --corpus {corpus})")
+    if missing:
+        print(f"[warn] {corpus}: {missing} selected clips had no WAV (skipped)")
+
+    lang = CORPUS_LANGUAGE[corpus]
+    for split, rows in sorted(by_split.items()):
+        rows.sort(key=lambda r: r["audio_path"])
+        out = metadata_dir / f"{corpus}_{split}.jsonl"
+        write_jsonl(rows, out)
+        total_h = sum(r["duration"] for r in rows) / 3600.0
+        note = " (reserved for eval, not used in training)" if split == "test" else ""
+        print(f"[{corpus}] {split}={len(rows)} ({total_h:.1f} h, language={lang}){note}")
+
+
 def build_corpus(
     corpus: str, wav_root: Path, metadata_dir: Path,
     base_dir: Path, eval_count: int = 0, missing_ok: bool = False
@@ -97,7 +134,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--corpus",
-        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "all"],
+        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech", "all"],
         default="all")
     parser.add_argument("--wav-root", default="data/wav16k")
     parser.add_argument("--metadata-dir", default="data/metadata")
@@ -120,12 +157,21 @@ def main():
         "golos": 0,
     }
 
-    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos"]
+    # Corpora that ship their own train/dev/test splits
+    native_split_corpora = {"kazmedspeech"}
+
+    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech"]
     sweep = args.corpus == "all"
     targets = all_corpora if sweep else [args.corpus]
 
     for corpus in targets:
-        build_corpus(corpus, wav_root / corpus, metadata_dir, base_dir, eval_count=eval_count[corpus], missing_ok=sweep)
+        if corpus in native_split_corpora:
+            build_corpus_native_splits(
+                corpus, wav_root / corpus, metadata_dir, base_dir, missing_ok=sweep)
+        else:
+            build_corpus(
+                corpus, wav_root / corpus, metadata_dir, base_dir,
+                eval_count=eval_count[corpus], missing_ok=sweep)
 
 
 if __name__ == "__main__":

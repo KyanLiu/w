@@ -13,36 +13,52 @@ from preprocess.constants import SRC_SUBDIR, TARGET_SAMPLE_RATE
 from preprocess.indexers import index_corpus, cap_hours
 
 
-def _convert_audio_file(src: str, dst: str) -> tuple[str, str | None]:
+def _convert_audio_file(src: str, dst: str, audio_bytes: bytes | None = None) -> tuple[str, str | None]:
     """
     Convert one source audio file to a 16 kHz mono PCM-16 WAV at dst.
+    If audio_bytes exist, return it as is
     Returns (src, None) on success (or skip), (src, error_message) on failure.
+    Produce a 16 kHz mono PCM-16 WAV at dst.
     """
+    key = src or dst
     try:
         import soundfile as sf
         import numpy as np
 
         if Path(dst).exists():
-            return (src, None)
+            return (key, None)
+
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst + ".tmp"
+
+        if audio_bytes is not None:
+            # Already 16 kHz mono PCM-16 WAV bytes -> write as-is, atomically.
+            with open(tmp, "wb") as fh:
+                fh.write(audio_bytes)
+            Path(tmp).replace(dst)
+            return (key, None)
+
         audio, sr = sf.read(src, always_2d=True)
         audio = audio.mean(axis=1)  # downmix to mono
         if sr != TARGET_SAMPLE_RATE:
             import soxr
             audio = soxr.resample(audio, sr, TARGET_SAMPLE_RATE)
-        Path(dst).parent.mkdir(parents=True, exist_ok=True)
-        tmp = dst + ".tmp"
         sf.write(tmp, np.clip(audio, -1.0, 1.0).astype(np.float32),
                  TARGET_SAMPLE_RATE, subtype="PCM_16", format="WAV")
         Path(tmp).replace(dst)
-        return (src, None)
+        return (key, None)
     except Exception as e:
-        return (src, f"{type(e).__name__}: {e}")
+        return (key, f"{type(e).__name__}: {e}")
 
 
-def _convert_job(job: tuple[str, str]) -> tuple[str, str | None]:
-    """Unpack a (src, dst) job tuple so the worker can be driven by executor.map."""
-    src, dst = job
-    return _convert_audio_file(src, dst)
+def _convert_job(job: tuple) -> tuple[str, str | None]:
+    """Unpack a (src, dst[, audio_bytes]) job so the worker can be driven by map."""
+    if len(job) == 3:
+        src, dst, audio_bytes = job
+    else:
+        src, dst = job
+        audio_bytes = None
+    return _convert_audio_file(src, dst, audio_bytes)
 
 
 def _write_selection(entries, path: Path) -> None:
@@ -50,7 +66,8 @@ def _write_selection(entries, path: Path) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for e in entries:
             f.write(json.dumps(
-                {"rel_key": e.rel_key, "text": e.text, "duration": e.duration},
+                {"rel_key": e.rel_key, "text": e.text,
+                 "duration": e.duration, "split": e.split},
                 ensure_ascii=False) + "\n")
     print(f"[write] {len(entries)} selection rows -> {path}")
 
@@ -87,7 +104,10 @@ def prepare_corpus(
     # Persist the exact selected set (text + duration) for build_metadata.
     _write_selection(entries, selection_path)
 
-    jobs = [(e.src_audio, str(dst_root / e.rel_key)) for e in entries]
+    jobs = [
+        (e.src_audio, str(dst_root / e.rel_key), e.audio_bytes)
+        for e in entries
+    ]
     print(f"[convert] {corpus}: converting {len(jobs)} clips, {workers} workers")
 
     done = 0
@@ -118,7 +138,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--corpus",
-        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "all"],
+        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech", "all"],
         default="all")
     parser.add_argument("--extracted-root", default="data/extracted")
     parser.add_argument("--out-root", default="data/wav16k")
@@ -135,7 +155,7 @@ def main():
     out_root = Path(args.out_root)
     metadata_dir = Path(args.metadata_dir)
 
-    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos"]
+    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech"]
     sweep = args.corpus == "all"
     targets = all_corpora if sweep else [args.corpus]
 
@@ -149,6 +169,7 @@ def main():
         "cve": _cap(args.cve_target_hours),
         "cvr": _cap(args.cvr_target_hours),
         "golos": _cap(args.golos_target_hours),
+        "kazmedspeech": None,
     }
 
     for corpus in targets:

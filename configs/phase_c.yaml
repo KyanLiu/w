@@ -1,0 +1,42 @@
+phase: phase_c
+init_model: checkpoints/phase_b/best  # Start from the best Phase B (multilingual) checkpoint
+language: kk
+task: transcribe
+timestamps: false
+
+data:
+  train_metadata:
+    - data/metadata/kazmedspeech_train.jsonl
+  eval_metadata: data/metadata/kazmedspeech_dev.jsonl
+  max_audio_seconds: 30
+  num_proc: 8
+
+training:
+  output_dir: checkpoints/phase_c
+  effective_batch_size: 160
+  per_device_train_batch_size: 20
+  per_device_eval_batch_size: 10
+
+  learning_rate: 2.0e-6
+  lr_scheduler_type: linear
+  warmup_ratio: 0.01
+  num_train_epochs: 5
+  bf16: true
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  seed: 42
+
+  eval_steps: 100
+  save_steps: 100
+  save_total_limit: 3
+
+  predict_with_generate: true
+  generation_max_length: 225
+
+  metric_for_best_model: wer
+  greater_is_better: false
+  load_best_model_at_end: true
+
+  dataloader_num_workers: 8
+  report_to: tensorboard
+  logging_steps: 50

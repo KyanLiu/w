@@ -5,20 +5,31 @@ import csv
 import sys
 import random
 import soundfile as sf
+import pyarrow.parquet as pq
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
-from preprocess.constants import SEED, SRC_SUBDIR, CORPUS_AUDIO_EXT, CORPUS_KIND
+from preprocess.constants import (
+    SEED,
+    SRC_SUBDIR,
+    CORPUS_AUDIO_EXT,
+    CORPUS_KIND,
+    KAZMEDSPEECH_TEXT_COL,
+    KAZMEDSPEECH_DURATION_COL,
+    KAZMEDSPEECH_AUDIO_COL,
+)
 from preprocess.normalization import normalize
 
 
 @dataclass
 class Entry:
-    src_audio: str          # abs path to source audio file
+    src_audio: str          # abs path to source audio file ("" if byte-sourced)
     rel_key: str            # relative output path, .wav suffix
     text: str               # normalized transcript ("" if unknown here)
     duration: float | None  # seconds, or None if not yet known
+    split: str = "train"    # native split: train/dev/test (default train)
+    audio_bytes: bytes | None = None  # raw WAV bytes for byte-sourced corpora
 
 
 # Duration probing (header-only, no decode)
@@ -193,6 +204,69 @@ def _index_manifest(src_root: Path, ext: str, workers: int) -> Iterator[Entry]:
     print(f"[index] manifest: {n} usable entries")
 
 
+def _index_parquet(src_root: Path) -> Iterator[Entry]:
+    """
+    Used for KazMedSpeech dataset
+    Split into train/dev/test
+    where eaach rows hold:
+      - audio: struct {bytes, path} -- bytes are already 16 kHz mono PCM-16 WAV
+      - transcription: the transcript (Kazakh)
+      - duration: seconds (float)
+    """
+
+    shards = sorted(src_root.glob("*.parquet"))
+    if not shards:
+        sys.exit(f"[error] parquet: no *.parquet under {src_root}")
+
+    def _split_of(name: str) -> str:
+        low = name.lower()
+        if low.startswith("train"):
+            return "train"
+        if low.startswith("dev") or low.startswith("valid"):
+            return "dev"
+        if low.startswith("test"):
+            return "test"
+        return "train"  # fallback
+
+    n = 0
+    skipped = 0
+    per_split: dict[str, int] = {}
+    for shard in shards:
+        split = _split_of(shard.name)
+        stem = shard.stem
+        pf = pq.ParquetFile(str(shard))
+        row_idx = 0
+        for rg in range(pf.metadata.num_row_groups):
+            table = pf.read_row_group(rg)
+            cols = {
+                "audio": table.column(KAZMEDSPEECH_AUDIO_COL).to_pylist(),
+                "text": table.column(KAZMEDSPEECH_TEXT_COL).to_pylist(),
+                "dur": table.column(KAZMEDSPEECH_DURATION_COL).to_pylist(),
+            }
+            for audio, raw_text, dur in zip(cols["audio"], cols["text"], cols["dur"]):
+                i = row_idx
+                row_idx += 1
+                text = normalize(raw_text or "")
+                audio_bytes = audio.get("bytes") if isinstance(audio, dict) else None
+                if not text or audio_bytes is None:
+                    skipped += 1
+                    continue
+                rel_key = f"{split}/{stem}_{i:06d}.wav"
+                duration = float(dur) if dur is not None else None
+                n += 1
+                per_split[split] = per_split.get(split, 0) + 1
+                yield Entry(
+                    src_audio="",
+                    rel_key=rel_key,
+                    text=text,
+                    duration=duration,
+                    split=split,
+                    audio_bytes=audio_bytes,
+                )
+    print(f"[index] parquet: {n} usable rows across {len(shards)} shards "
+          f"(by split: {per_split}, {skipped} skipped)")
+
+
 def index_corpus(corpus: str, src_root: Path, workers: int, cv_tsv_name: str = "validated.tsv") -> list[Entry]:
     """Dispatch to the right indexer by CORPUS_KIND; returns a materialized list."""
     kind = CORPUS_KIND[corpus]
@@ -203,6 +277,8 @@ def index_corpus(corpus: str, src_root: Path, workers: int, cv_tsv_name: str = "
         return list(_index_cv_tsv(src_root, cv_tsv_name, workers))
     if kind == "manifest":
         return list(_index_manifest(src_root, ext, workers))
+    if kind == "parquet":
+        return list(_index_parquet(src_root))
     sys.exit(f"[error] unknown corpus kind {kind!r} for {corpus}")
 
 

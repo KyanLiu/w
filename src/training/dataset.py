@@ -16,6 +16,7 @@ from training.constants import (
     LANGUAGE,
     LANGUAGE_NAMES,
     MAX_AUDIO_SECONDS,
+    MAX_LABEL_TOKENS,
     MODEL_ID,
     TARGET_SR,
     TASK,
@@ -48,8 +49,14 @@ def build_dataset(
     tokenizer = processor.tokenizer
 
     def _not_overlength(example: dict) -> bool:
-        """Keep clips no longer than max_audio_seconds"""
-        return example["duration"] <= max_audio_seconds
+        """Keep clips no longer than max_audio_seconds or MAX_LBEL_TOKENS"""
+        if example["duration"] > max_audio_seconds:
+            return False
+        lang = example["language"]
+        full_lang = LANGUAGE_NAMES.get(lang, lang)
+        tokenizer.set_prefix_tokens(language=full_lang, task=TASK)
+        return len(tokenizer(example["text"]).input_ids) <= MAX_LABEL_TOKENS
+
 
     raw = raw.filter(_not_overlength, num_proc=num_proc)
 

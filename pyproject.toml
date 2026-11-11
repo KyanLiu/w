@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "soundfile",
     "soxr",
+    "pyarrow",
 ]
 
 [project.optional-dependencies]

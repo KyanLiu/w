@@ -9,7 +9,7 @@ import json
 import argparse
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from preprocess.constants import SRC_SUBDIR, TARGET_SAMPLE_RATE
+from preprocess.constants import SRC_SUBDIR, TARGET_SAMPLE_RATE, OPTIONAL_CLIP_FIELDS
 from preprocess.indexers import index_corpus, cap_hours
 
 
@@ -65,10 +65,14 @@ def _write_selection(entries, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for e in entries:
-            f.write(json.dumps(
-                {"rel_key": e.rel_key, "text": e.text,
-                 "duration": e.duration, "split": e.split},
-                ensure_ascii=False) + "\n")
+            row = {"rel_key": e.rel_key, "text": e.text,
+                   "duration": e.duration, "split": e.split}
+            # optional fields
+            for key in OPTIONAL_CLIP_FIELDS:
+                val = getattr(e, key, None)
+                if val is not None:
+                    row[key] = val
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(f"[write] {len(entries)} selection rows -> {path}")
 
 
@@ -138,7 +142,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--corpus",
-        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech", "all"],
+        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech", "fleurs_kk", "all"],
         default="all")
     parser.add_argument("--extracted-root", default="data/extracted")
     parser.add_argument("--out-root", default="data/wav16k")
@@ -155,7 +159,7 @@ def main():
     out_root = Path(args.out_root)
     metadata_dir = Path(args.metadata_dir)
 
-    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech"]
+    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech", "fleurs_kk"]
     sweep = args.corpus == "all"
     targets = all_corpora if sweep else [args.corpus]
 
@@ -170,6 +174,7 @@ def main():
         "cvr": _cap(args.cvr_target_hours),
         "golos": _cap(args.golos_target_hours),
         "kazmedspeech": None,
+        "fleurs_kk": None,   # eval set, used in full
     }
 
     for corpus in targets:

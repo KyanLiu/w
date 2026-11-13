@@ -13,6 +13,7 @@ SRC_SUBDIR = {
     "cvr": "cvr/cv-corpus-27.0-2026-09-11/ru",
     "golos": "golos",
     "kazmedspeech": "kazmedspeech/data",
+    "fleurs_kk": "fleurs_kk/parquet-data/kk_kz",
 }
 
 CORPUS_AUDIO_EXT = {
@@ -22,6 +23,7 @@ CORPUS_AUDIO_EXT = {
     "cvr": ".mp3",
     "golos": ".opus",
     "kazmedspeech": ".wav",
+    "fleurs_kk": ".wav",
 }
 
 CORPUS_LANGUAGE = {
@@ -31,13 +33,14 @@ CORPUS_LANGUAGE = {
     "cvr": "ru",
     "golos": "ru",
     "kazmedspeech": "kk",
+    "fleurs_kk": "kk",
 }
 
 # Corpus pairs audio with its transcript.
 # txt_tree : audio tree + per-file .txt sidecar (ksc2, kazemotts)
 # cv_tsv   : Common Voice clips/*.mp3 + validated.tsv (cve, cvr)
 # manifest : audio tree + a JSONL manifest mapping id -> text (golos)
-# parquet  : parquet shards with embedded audio bytes + native splits and a per-row duration column (kazmedspeech)
+# parquet  : parquet shards with embedded audio bytes + native splits and a per-row duration column (kazmedspeech, fleurs_kk)
 CORPUS_KIND = {
     "ksc2": "txt_tree",
     "kazemotts": "txt_tree",
@@ -45,9 +48,29 @@ CORPUS_KIND = {
     "cvr": "cv_tsv",
     "golos": "manifest",
     "kazmedspeech": "parquet",
+    "fleurs_kk": "parquet",
 }
 
-# Column names for KazMedSpeech parquet rows
-KAZMEDSPEECH_TEXT_COL = "transcription"
-KAZMEDSPEECH_DURATION_COL = "duration"
-KAZMEDSPEECH_AUDIO_COL = "audio"
+PARQUET_COLUMNS = {
+    "kazmedspeech": {
+        "text": "transcription",
+        "audio": "audio",
+        "duration": "duration",
+        "num_samples": None,
+        "notations": "medical_notations",
+        "domain": "medical_domain",
+        "recording": "episode",
+    },
+    "fleurs_kk": {
+        "text": "transcription",
+        "audio": "audio",
+        "duration": None,
+        "num_samples": "num_samples",
+        "notations": None,
+        "domain": None,
+        "recording": None,
+    },
+}
+
+# Optional per-clip fields
+OPTIONAL_CLIP_FIELDS = ("notations", "domain", "recording")

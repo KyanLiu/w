@@ -15,9 +15,8 @@ from preprocess.constants import (
     SRC_SUBDIR,
     CORPUS_AUDIO_EXT,
     CORPUS_KIND,
-    KAZMEDSPEECH_TEXT_COL,
-    KAZMEDSPEECH_DURATION_COL,
-    KAZMEDSPEECH_AUDIO_COL,
+    PARQUET_COLUMNS,
+    TARGET_SAMPLE_RATE,
 )
 from preprocess.normalization import normalize
 
@@ -30,6 +29,9 @@ class Entry:
     duration: float | None  # seconds, or None if not yet known
     split: str = "train"    # native split: train/dev/test (default train)
     audio_bytes: bytes | None = None  # raw WAV bytes for byte-sourced corpora
+    notations: str | None = None      # optional per-clip notation term list (KazMedSpeech -> medical term list)
+    domain: str | None = None         # optional domain/specialty label (KazMedSpeech -> per-domain WER)
+    recording: str | None = None      # optional recording/episode id for the bootstrap grouping
 
 
 # Duration probing (header-only, no decode)
@@ -204,15 +206,24 @@ def _index_manifest(src_root: Path, ext: str, workers: int) -> Iterator[Entry]:
     print(f"[index] manifest: {n} usable entries")
 
 
-def _index_parquet(src_root: Path) -> Iterator[Entry]:
+def _index_parquet(src_root: Path, corpus: str) -> Iterator[Entry]:
     """
-    Used for KazMedSpeech dataset
+    Parquet corpora with embedded audio bytes (KazMedSpeech, FLEURS Kazakh)
     Split into train/dev/test
-    where eaach rows hold:
+    where each rows hold:
       - audio: struct {bytes, path} -- bytes are already 16 kHz mono PCM-16 WAV
       - transcription: the transcript (Kazakh)
       - duration: seconds (float)
+    Other additional columns are also parsed as part of the corpus
     """
+    spec = PARQUET_COLUMNS[corpus]
+    text_col = spec["text"]
+    audio_col = spec["audio"]
+    dur_col = spec["duration"]
+    nsamp_col = spec["num_samples"]
+    notations_col = spec["notations"]
+    domain_col = spec.get("domain")
+    recording_col = spec.get("recording")
 
     shards = sorted(src_root.glob("*.parquet"))
     if not shards:
@@ -235,24 +246,41 @@ def _index_parquet(src_root: Path) -> Iterator[Entry]:
         split = _split_of(shard.name)
         stem = shard.stem
         pf = pq.ParquetFile(str(shard))
+        names = set(pf.schema_arrow.names)
         row_idx = 0
         for rg in range(pf.metadata.num_row_groups):
             table = pf.read_row_group(rg)
-            cols = {
-                "audio": table.column(KAZMEDSPEECH_AUDIO_COL).to_pylist(),
-                "text": table.column(KAZMEDSPEECH_TEXT_COL).to_pylist(),
-                "dur": table.column(KAZMEDSPEECH_DURATION_COL).to_pylist(),
-            }
-            for audio, raw_text, dur in zip(cols["audio"], cols["text"], cols["dur"]):
+            audio_list = table.column(audio_col).to_pylist()
+            text_list = table.column(text_col).to_pylist()
+            dur_list = table.column(dur_col).to_pylist() if dur_col and dur_col in names else None
+            nsamp_list = table.column(nsamp_col).to_pylist() if nsamp_col and nsamp_col in names else None
+            notations_list = (table.column(notations_col).to_pylist()
+                              if notations_col and notations_col in names else None)
+            domain_list = (table.column(domain_col).to_pylist()
+                           if domain_col and domain_col in names else None)
+            recording_list = (table.column(recording_col).to_pylist()
+                              if recording_col and recording_col in names else None)
+
+            for j in range(len(text_list)):
                 i = row_idx
                 row_idx += 1
-                text = normalize(raw_text or "")
+                audio = audio_list[j]
+                text = normalize(text_list[j] or "")
                 audio_bytes = audio.get("bytes") if isinstance(audio, dict) else None
                 if not text or audio_bytes is None:
                     skipped += 1
                     continue
+                # duration: prefer a direct column, else derive from num_samples
+                if dur_list is not None and dur_list[j] is not None:
+                    duration = float(dur_list[j])
+                elif nsamp_list is not None and nsamp_list[j] is not None:
+                    duration = float(nsamp_list[j]) / float(TARGET_SAMPLE_RATE)
+                else:
+                    duration = None
+                notations = notations_list[j] if notations_list is not None else None
+                domain = domain_list[j] if domain_list is not None else None
+                recording = recording_list[j] if recording_list is not None else None
                 rel_key = f"{split}/{stem}_{i:06d}.wav"
-                duration = float(dur) if dur is not None else None
                 n += 1
                 per_split[split] = per_split.get(split, 0) + 1
                 yield Entry(
@@ -262,8 +290,11 @@ def _index_parquet(src_root: Path) -> Iterator[Entry]:
                     duration=duration,
                     split=split,
                     audio_bytes=audio_bytes,
+                    notations=notations,
+                    domain=domain,
+                    recording=recording,
                 )
-    print(f"[index] parquet: {n} usable rows across {len(shards)} shards "
+    print(f"[index] parquet ({corpus}): {n} usable rows across {len(shards)} shards "
           f"(by split: {per_split}, {skipped} skipped)")
 
 
@@ -278,7 +309,7 @@ def index_corpus(corpus: str, src_root: Path, workers: int, cv_tsv_name: str = "
     if kind == "manifest":
         return list(_index_manifest(src_root, ext, workers))
     if kind == "parquet":
-        return list(_index_parquet(src_root))
+        return list(_index_parquet(src_root, corpus))
     sys.exit(f"[error] unknown corpus kind {kind!r} for {corpus}")
 
 

@@ -1,0 +1,32 @@
+# Evaluation config.
+# Evaluates a frozen model on held-out sets with greedy decoding
+# Reports WER, CER, MER and 2,000-resample bootstrap CIs.
+
+model: checkpoints/phase_c/best
+
+language: kk
+task: transcribe
+timestamps: false
+max_audio_seconds: 30
+num_proc: 8
+
+eval_sets:
+  # In-domain: WER + MER (+ per-domain WER). Test split only (719 clips),
+  # never seen in Phase C training.
+  kazmed_test: data/metadata/kazmedspeech_test.jsonl
+  # General Kazakh forgetting probe: WER only (FLEURS has no medical terms).
+  fleurs_kk:   data/metadata/fleurs_kk_test.jsonl
+  # Optional continuity probe (Phase A's held-out KK read speech).
+  ksc2:        data/metadata/ksc2_eval_597.jsonl
+
+decoding:
+  num_beams: 1                 # greedy (recipe)
+  do_sample: false
+  per_device_eval_batch_size: 16
+  generation_max_length: 225
+
+metrics:
+  bootstrap_resamples: 2000    # recipe
+  seed: 42
+
+output_dir: results/eval       # JSON + markdown report per model/run

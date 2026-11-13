@@ -4,7 +4,7 @@ import json
 import random
 import argparse
 from pathlib import Path
-from preprocess.constants import SEED, CORPUS_LANGUAGE
+from preprocess.constants import SEED, CORPUS_LANGUAGE, OPTIONAL_CLIP_FIELDS
 from preprocess.metadata_utils import write_jsonl
 
 
@@ -21,7 +21,7 @@ def _load_selection(corpus: str, metadata_dir: Path, missing_ok: bool = False) -
 
 
 def _row(rel_key: str, text: str, duration, corpus: str, split: str,
-         wav_root: Path, base_dir: Path) -> dict | None:
+         wav_root: Path, base_dir: Path, extra: dict | None = None) -> dict | None:
     wav = wav_root / rel_key
     if not wav.exists():
         return None
@@ -29,7 +29,7 @@ def _row(rel_key: str, text: str, duration, corpus: str, split: str,
         rel = wav.resolve().relative_to(base_dir).as_posix()
     except ValueError:
         rel = wav.as_posix()
-    return {
+    row = {
         "audio_path": rel,
         "text": text,
         "language": CORPUS_LANGUAGE[corpus],
@@ -37,6 +37,13 @@ def _row(rel_key: str, text: str, duration, corpus: str, split: str,
         "split": split,
         "duration": round(float(duration), 3),
     }
+    # optional eval-only fields (notations -> MER, domain -> per-domain WER,
+    # recording -> bootstrap grouping)
+    if extra:
+        for key in OPTIONAL_CLIP_FIELDS:
+            if extra.get(key) is not None:
+                row[key] = extra[key]
+    return row
 
 
 def build_corpus_native_splits(
@@ -56,7 +63,9 @@ def build_corpus_native_splits(
     missing = 0
     for r in sel:
         split = r.get("split", "train")
-        row = _row(r["rel_key"], r["text"], r["duration"], corpus, split, wav_root, base_dir)
+        extra = {k: r.get(k) for k in OPTIONAL_CLIP_FIELDS if k in r}
+        row = _row(r["rel_key"], r["text"], r["duration"], corpus, split,
+                   wav_root, base_dir, extra=extra)
         if row is None:
             missing += 1
         else:
@@ -134,7 +143,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--corpus",
-        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech", "all"],
+        choices=["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech", "fleurs_kk", "all"],
         default="all")
     parser.add_argument("--wav-root", default="data/wav16k")
     parser.add_argument("--metadata-dir", default="data/metadata")
@@ -158,9 +167,9 @@ def main():
     }
 
     # Corpora that ship their own train/dev/test splits
-    native_split_corpora = {"kazmedspeech"}
+    native_split_corpora = {"kazmedspeech", "fleurs_kk"}
 
-    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech"]
+    all_corpora = ["ksc2", "kazemotts", "cve", "cvr", "golos", "kazmedspeech", "fleurs_kk"]
     sweep = args.corpus == "all"
     targets = all_corpora if sweep else [args.corpus]
 

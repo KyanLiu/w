@@ -15,7 +15,7 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 from transformers import WhisperForConditionalGeneration
-
+from training.constants import MAX_LABEL_TOKENS, LANGUAGE_NAMES, TASK
 from training.collator import DataCollatorSpeechSeq2SeqWithPadding
 from training.dataset import build_dataset, load_processor
 from eval.metrics import (
@@ -46,12 +46,31 @@ def _decode_set(model, processor, collator, jsonl_path: str, cfg: dict, device) 
     )
     eval_ds = ds["eval"]
 
-    # Also load the raw rows (for notations/domain/recording), aligned by order.
+    # Load raw rows and apply the SAME over-length / label-length filter
+    max_audio_seconds = cfg.get("max_audio_seconds", 30)
+    tok = processor.tokenizer
+
+    def _keep(row: dict) -> bool:
+        if row["duration"] > max_audio_seconds:
+            return False
+        full_lang = LANGUAGE_NAMES.get(row["language"], row["language"])
+        tok.set_prefix_tokens(language=full_lang, task=TASK)
+        return len(tok(row["text"]).input_ids) <= MAX_LABEL_TOKENS
+
     raw_rows = []
+    dropped = 0
     with open(jsonl_path, encoding="utf-8") as f:
         for line in f:
-            if line.strip():
-                raw_rows.append(json.loads(line))
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            if _keep(r):
+                raw_rows.append(r)
+            else:
+                dropped += 1
+    if dropped:
+        print(f"[eval] filtered {dropped} over-length rows "
+              f"({len(raw_rows)} kept) to match dataset")
 
     dec = cfg.get("decoding", {})
     batch_size = dec.get("per_device_eval_batch_size", 16)
@@ -87,6 +106,16 @@ def _decode_set(model, processor, collator, jsonl_path: str, cfg: dict, device) 
                 row = raw_rows[idx]
                 results.append({"hyp": h, "ref": row["text"], "row": row})
                 idx += 1
+
+    # Alignment guard: decoded count must equal the (filtered) raw-row count.
+    # A mismatch means raw_rows and eval_ds disagree -> refs/hyps would be
+    # misaligned, silently inflating WER. Fail loudly instead.
+    if idx != len(raw_rows):
+        raise RuntimeError(
+            f"alignment mismatch for {jsonl_path}: decoded {idx} clips but have "
+            f"{len(raw_rows)} filtered raw rows (eval_ds n={n}). "
+            f"ref/hyp pairing would be wrong."
+        )
     return results
 
 
